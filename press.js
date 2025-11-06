@@ -1,9 +1,9 @@
 // press.js
 const { chromium } = require('@playwright/test');
 
-const LOGIN_URL = 'https://example.com/login'; // <-- anpassen
-const APP_URL   = 'https://example.com/app';   // <-- anpassen
-const BTN_SEL   = 'button#hourly';             // <-- anpassen
+const LOGIN_URL = 'https://gpanel.eternalzero.cloud/auth/login'; // <-- anpassen
+const APP_URL   = 'https://gpanel.eternalzero.cloud/server/675ad07f';   // <-- anpassen
+const BTN_SEL   = 'button.RenewBox__RenewButton-sc-1inh2rq-6';             // <-- anpassen
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
