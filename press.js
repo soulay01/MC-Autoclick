@@ -5,7 +5,7 @@ const LOGIN_URL = 'https://gpanel.eternalzero.cloud/auth/login'; // <-- anpassen
 const APP_URL   = 'https://gpanel.eternalzero.cloud/server/675ad07f';   // <-- anpassen
 ////////////////////////////////////////////////////////////////////////////////
 
-// 🔎 Kandidaten für deinen Button (deiner ist hier gleich eingetragen)
+// 🔎 Kandidaten für deinen Button (deiner ist direkt eingetragen)
 const BTN_CANDIDATES = [
   'button.RenewBox__RenewButton-sc-1inh2rq-6',   // dein exakter Button
   '.RenewBox__RenewButton-sc-1inh2rq-6',
@@ -110,7 +110,7 @@ async function hardenAgainstAds(page) {
 ////////////////////////////////////////////////////////////////////////////////
 
 (async () => {
-  console.log('🚀 press.js v3.3 gestartet');
+  console.log('🚀 press.js v3.3-fix gestartet');
   const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
   const context = await browser.newContext({
     locale: 'de-DE',
@@ -129,7 +129,7 @@ async function hardenAgainstAds(page) {
     await clickIfExists(page, EMAIL_OPENERS);
     await page.waitForTimeout(400);
 
-    // Login-Felder suchen
+    // Login-Felder suchen (main + frames)
     const findField = async () => {
       let emailEl = await findFirst(page, EMAIL_CANDIDATES);
       let passEl  = await findFirst(page, PASS_CANDIDATES);
@@ -157,12 +157,17 @@ async function hardenAgainstAds(page) {
       process.exit(0);
     }
 
+    // ✅ Locator-Methoden direkt nutzen (kein .selector())
     await emailEl.scrollIntoViewIfNeeded().catch(()=>{});
     await passEl.scrollIntoViewIfNeeded().catch(()=>{});
-    await ctx.fill(await emailEl.selector(), process.env.USER_EMAIL, { timeout: 15000 });
-    await ctx.fill(await passEl.selector(),  process.env.USER_PASS,  { timeout: 15000 });
-    if (submitEl) await ctx.click(await submitEl.selector()).catch(() => ctx.press(await passEl.selector(), 'Enter'));
-    else          await ctx.press(await passEl.selector(), 'Enter');
+    await emailEl.fill(process.env.USER_EMAIL, { timeout: 15000 });
+    await passEl.fill(process.env.USER_PASS,  { timeout: 15000 });
+
+    if (submitEl) {
+      await submitEl.click().catch(async () => { await passEl.press('Enter'); });
+    } else {
+      await passEl.press('Enter').catch(()=>{});
+    }
     await page.waitForTimeout(1200);
 
     // Button-Seite
@@ -170,7 +175,7 @@ async function hardenAgainstAds(page) {
     await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
     await page.waitForTimeout(400);
 
-    // Button suchen
+    // Button suchen (main + frames), ggf. scroll & retry
     const findButton = async () => {
       let el = await findFirst(page, BTN_CANDIDATES, 3500);
       if (el) return { ctx: page, el };
@@ -195,7 +200,7 @@ async function hardenAgainstAds(page) {
       process.exit(0);
     }
 
-    const { ctx: bctx, el: btn } = btnCtx;
+    const { el: btn } = btnCtx;
     await btn.scrollIntoViewIfNeeded().catch(()=>{});
     const disabled = await btn.isDisabled().catch(() => true);
     if (disabled) {
