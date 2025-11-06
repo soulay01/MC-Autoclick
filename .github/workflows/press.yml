@@ -30,8 +30,8 @@ jobs:
       - name: Install deps
         run: npm ci || npm i
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps
+      - name: Install Playwright (Chromium only)
+        run: npx playwright install --with-deps chromium
 
       - name: Run press
         run: node press.js
