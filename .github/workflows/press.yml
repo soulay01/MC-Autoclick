@@ -76,4 +76,5 @@ jobs:
           path: |
             *.png
             *.html
+            *.json
           if-no-files-found: ignore
