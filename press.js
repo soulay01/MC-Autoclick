@@ -5,6 +5,61 @@ const LOGIN_URL = 'https://gpanel.eternalzero.cloud/auth/login'; // <-- anpassen
 const APP_URL   = 'https://gpanel.eternalzero.cloud/server/675ad07f';   // <-- anpassen
 const BTN_SEL   = 'button.RenewBox__RenewButton-sc-1inh2rq-6';             // <-- anpassen
 
+// Mögliche Feld-Selektoren (häufige Varianten)
+const EMAIL_CANDIDATES = [
+  'input[name="email"]',
+  'input#email',
+  'input[name="username"]',
+  'input#username',
+  'input[type="email"]',
+  'input[autocomplete="username"]'
+];
+const PASS_CANDIDATES = [
+  'input[name="password"]',
+  'input#password',
+  'input[type="password"]',
+  'input[autocomplete="current-password"]'
+];
+const SUBMIT_CANDIDATES = [
+  'button[type="submit"]',
+  'input[type="submit"]',
+  'button:has-text("Login")',
+  'button:has-text("Log in")',
+  'button:has-text("Anmelden")',
+  '[data-testid="login-submit"]'
+];
+
+// Häufige Cookie-Banner
+const COOKIE_CANDIDATES = [
+  'button:has-text("Accept")',
+  'button:has-text("I agree")',
+  'button:has-text("Akzeptieren")',
+  'button:has-text("Alle akzeptieren")',
+  '#onetrust-accept-btn-handler',
+  'button[aria-label="dismiss"]'
+];
+
+async function clickIfExists(page, selectors, timeout = 2000) {
+  for (const sel of selectors) {
+    const el = page.locator(sel);
+    if (await el.first().isVisible({ timeout }).catch(() => false)) {
+      await el.first().click({ timeout }).catch(() => {});
+      return true;
+    }
+  }
+  return false;
+}
+
+async function findFirst(pageOrFrame, selectors, timeout = 5000) {
+  for (const sel of selectors) {
+    const loc = pageOrFrame.locator(sel);
+    if (await loc.first().isVisible({ timeout }).catch(() => false)) {
+      return sel;
+    }
+  }
+  return null;
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext(); // frische Session pro Lauf
