@@ -9,12 +9,15 @@ const APP_URL   = 'https://gpanel.eternalzero.cloud/server/675ad07f';   // <-- a
 
 // Dein Button + Alternativen (deiner ganz oben)
 const BTN_CANDIDATES = [
-  'button.RenewBox__RenewButton-sc-1inh2rq-6',
-  '.RenewBox__RenewButton-sc-1inh2rq-6',
+  // sehr robust: egal welcher Hash/Suffix
+  'button[class*="RenewBox__RenewButton"]',
+  '[class*="RenewBox__RenewButton"]',
+  // text/aria/testid fallback
   'button:has-text("Renew")',
   'button:has-text("Extend")',
   'button:has-text("Keep Alive")',
-  '[data-testid*="renew"]',
+  'button[aria-label*="renew" i]',
+  '[data-testid*="renew" i]',
   '.renew-button'
 ];
 
@@ -155,30 +158,90 @@ async function hardenAgainstAds(page) {
       console.log('💾 Session gespeichert: auth.json');
 
       // zurück zur Zielseite
-      await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      console.log('➡️ Auf Seite:', page.url());
-      await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
+      // 3) Button-Seite (SPA: domcontentloaded reicht)
+await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+console.log('➡️ Auf Seite:', page.url());
 
-      btn = await findFirst(page, BTN_CANDIDATES, 3000);
+// Kandidaten, die evtl. zuerst geöffnet werden müssen (Sidebar/Tab/Box)
+const BTN_OPENERS = [
+  'a:has-text("Renew")', 'button:has-text("Renew")',
+  'a:has-text("Extend")','button:has-text("Extend")',
+  'a:has-text("Keep Alive")','button:has-text("Keep Alive")',
+  '[data-testid*="renew" i]', '[aria-controls*="renew" i]', '[aria-label*="renew" i]'
+];
+
+const findButtonOnce = async () => {
+  // 1) exakte Kandidaten durchsuchen (main + frames)
+  const ctxs = [page, ...page.frames().filter(f => f !== page.mainFrame())];
+  for (const ctx of ctxs) {
+    for (const sel of BTN_CANDIDATES) {
+      const el = ctx.locator(sel).first();
+      if (await el.isVisible({ timeout: 600 }).catch(()=>false)) return el;
+      // Falls erst im DOM, aber nicht sichtbar → trotzdem zurückgeben
+      if (await el.count().catch(()=>0)) return el;
     }
+  }
+  return null;
+};
 
-    if (!btn) {
-      console.log('ℹ️ Button nicht sichtbar – Artefakte folgen.');
-      await saveArtifacts(page, 'no-button');
-      process.exit(0);
-    }
+// bis zu 6 Versuche: Overlays schließen, Opener klicken, warten, scrollen, suchen
+let btn = null;
+for (let attempt = 0; attempt < 6 && !btn; attempt++) {
+  await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES).catch(()=>{});
+  await clickIfExists(page, BTN_OPENERS).catch(()=>{});
 
-    await btn.scrollIntoViewIfNeeded().catch(()=>{});
-    const disabled = await btn.isDisabled().catch(() => true);
-    if (disabled) {
-      console.log('⏳ Button ist gesperrt – später wieder versuchen.');
-      await saveArtifacts(page, 'disabled');
-      process.exit(0);
-    }
+  // kleine Wartezeit für dynamische DOM-Updates
+  await page.waitForTimeout(700);
 
-    await btn.click({ timeout: 10000 });
-    console.log('✅ Button geklickt');
-    await saveArtifacts(page, 'clicked');
+  // versuche, dass der Button wenigstens "attached" ist (auch wenn noch nicht sichtbar)
+  try {
+    await page.waitForSelector('[class*="RenewBox__RenewButton"]', { state: 'attached', timeout: 1500 });
+  } catch {}
+
+  // scroll etwas, falls weiter unten
+  await page.mouse.wheel(0, 1800).catch(()=>{});
+  await page.waitForTimeout(300);
+
+  btn = await findButtonOnce();
+}
+
+if (!btn) {
+  // Diagnose: alle Buttons/Links dumpen
+  const dump = await page.evaluate(() => {
+    const pick = (el) => ({
+      tag: el.tagName.toLowerCase(),
+      text: (el.innerText || '').trim().slice(0,120),
+      cls: (el.className || '').toString().slice(0,200),
+      disabled: !!el.disabled,
+      aria: el.getAttribute('aria-label') || '',
+      id: el.id || ''
+    });
+    return {
+      url: location.href,
+      buttons: Array.from(document.querySelectorAll('button')).map(pick).slice(0,200),
+      links:   Array.from(document.querySelectorAll('a')).map(pick).slice(0,200)
+    };
+  });
+  require('fs').writeFileSync('dom-dump.json', JSON.stringify(dump, null, 2));
+  console.log('ℹ️ Button nicht sichtbar – dom-dump.json erstellt. Artefakte folgen.');
+  await saveArtifacts(page, 'no-button');
+  process.exit(0);
+}
+
+// Status prüfen (sowohl via API als auch via disabled-Attribut)
+await btn.scrollIntoViewIfNeeded().catch(()=>{});
+const disabledAttr = await btn.getAttribute('disabled').catch(()=>null);
+const isDisabled = disabledAttr !== null ? true : await btn.isDisabled().catch(() => true);
+
+if (isDisabled) {
+  console.log('⏳ Button ist gesperrt – später wieder versuchen.');
+  await saveArtifacts(page, 'disabled');
+  process.exit(0);
+}
+
+await btn.click({ timeout: 10000 });
+console.log('✅ Button geklickt');
+await saveArtifacts(page, 'clicked');
 
   } catch (err) {
     console.error('❌ Unerwarteter Fehler:', err?.message || err);
