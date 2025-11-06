@@ -2,13 +2,19 @@ name: press-hourly
 
 on:
   schedule:
-    - cron: '0 * * * *'  # stündlich, **UTC**
-  workflow_dispatch:      # manueller Start-Button in der UI
+    - cron: '0 * * * *'   # stündlich (UTC)
+  workflow_dispatch:       # manueller Start-Button
+
+# Verhindert Überschneidungen, falls ein Lauf länger dauert
+concurrency:
+  group: press-hourly
+  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
     steps:
       - uses: actions/checkout@v4
 
@@ -16,8 +22,8 @@ jobs:
         with:
           node-version: '20'
 
-      # optional: Caching beschleunigt Runs ein wenig
-      - name: Cache node_modules
+      # Cache für node_modules und Playwright-Downloads (schneller bei Folgeläufen)
+      - name: Cache node_modules & Playwright
         uses: actions/cache@v4
         with:
           path: |
@@ -30,6 +36,7 @@ jobs:
       - name: Install deps
         run: npm ci || npm i
 
+      # Nur Chromium installieren (reicht für dein Script & schneller/stabiler)
       - name: Install Playwright (Chromium only)
         run: npx playwright install --with-deps chromium
 
@@ -38,3 +45,14 @@ jobs:
         env:
           USER_EMAIL: ${{ secrets.USER_EMAIL }}
           USER_PASS:  ${{ secrets.USER_PASS }}
+
+      # Debug-Assets immer hochladen (Screenshots/HTML aus press.js)
+      - name: Upload artifacts (screenshot & html)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: press-artifacts
+          path: |
+            *.png
+            *.html
+          if-no-files-found: ignore
