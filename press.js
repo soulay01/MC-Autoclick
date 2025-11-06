@@ -1,23 +1,28 @@
-// press.js  (v3.2 – block ads, dismiss overlays, robust login)
+// press.js  (v3.3 – auto-find button across frames)
 const { chromium } = require('@playwright/test');
 
 const LOGIN_URL = 'https://gpanel.eternalzero.cloud/auth/login'; // <-- anpassen
 const APP_URL   = 'https://gpanel.eternalzero.cloud/server/675ad07f';   // <-- anpassen
-const BTN_SEL   = 'button.RenewBox__RenewButton-sc-1inh2rq-6';             // <-- anpassen
-// ============================================================================
+////////////////////////////////////////////////////////////////////////////////
 
-// Häufige Login-Fallstricke abfangen
-const EMAIL_OPENERS = [
-  'button:has-text("Continue with Email")',
-  'button:has-text("Sign in with Email")',
-  'button:has-text("Login with Email")',
-  'button:has-text("Mit E-Mail")',
-  'a:has-text("Mit E-Mail")',
-  'a:has-text("Continue with Email")',
-  '[data-testid*="email"][role="button"]'
+// 🔎 Kandidaten für deinen Button (deiner ist hier gleich eingetragen)
+const BTN_CANDIDATES = [
+  'button.RenewBox__RenewButton-sc-1inh2rq-6',   // dein exakter Button
+  '.RenewBox__RenewButton-sc-1inh2rq-6',
+  'button.Button__ButtonStyle-sc-1qu1gou-0.RenewBox__RenewButton-sc-1inh2rq-6',
+  'button:has-text("Renew")',
+  'button:has-text("Extend")',
+  'button:has-text("Keep Alive")',
+  '[data-testid*="renew"]',
+  '.renew-button'
 ];
 
-// Kandidaten für Felder/Submit (DE/EN, verschiedenste UIs)
+const EMAIL_OPENERS = [
+  'button:has-text("Continue with Email")','button:has-text("Sign in with Email")',
+  'button:has-text("Login with Email")','button:has-text("Mit E-Mail")',
+  'a:has-text("Mit E-Mail")','a:has-text("Continue with Email")'
+];
+
 const EMAIL_CANDIDATES = [
   'input[name="email"]','input#email','input[type="email"]',
   'input[name="username"]','input#username','input[name="identifier"]','input[name="emailAddress"]',
@@ -37,7 +42,6 @@ const SUBMIT_CANDIDATES = [
   '[data-testid="login-submit"]','button[aria-label*="Login" i]','button[aria-label*="Anmelden" i]'
 ];
 
-// Cookie-Banner & typische Overlay-Schließen-Buttons
 const COOKIE_CANDIDATES = [
   'button:has-text("Accept")','button:has-text("I agree")',
   'button:has-text("Akzeptieren")','button:has-text("Alle akzeptieren")',
@@ -48,7 +52,8 @@ const OVERLAY_CLOSE_CANDIDATES = [
   'button:has-text("Schließen")','button:has-text("Close")','[role="dialog"] button'
 ];
 
-// --- Utilities ---------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
+
 async function saveArtifacts(page, label) {
   try {
     await page.screenshot({ path: `${label}.png`, fullPage: true }).catch(() => {});
@@ -56,142 +61,144 @@ async function saveArtifacts(page, label) {
     if (html) require('fs').writeFileSync(`${label}.html`, html);
   } catch {}
 }
+
 async function clickIfExists(ctx, selectors, timeout = 2500) {
   for (const sel of selectors) {
     try {
       const el = ctx.locator(sel).first();
       if (await el.isVisible({ timeout })) {
         await el.click({ timeout }).catch(() => {});
-        await ctx.waitForTimeout(300);
+        await ctx.waitForTimeout(250);
         return true;
       }
     } catch {}
   }
   return false;
 }
-async function findFirst(ctx, selectors, timeout = 3000) {
+
+async function findFirst(ctx, selectors, timeout = 3500) {
   for (const sel of selectors) {
     try {
       const el = ctx.locator(sel).first();
-      if (await el.isVisible({ timeout })) return sel;
+      if (await el.isVisible({ timeout })) return el;
     } catch {}
   }
   return null;
 }
 
-// ❌ Werbenetzwerke blocken + sichtbare Ad-Overlays entfernen
 async function hardenAgainstAds(page) {
-  const AD_HOST_HINTS = [
-    'doubleclick', 'googlesyndication', 'adservice', 'adnxs', 'taboola', 'outbrain', 'googleads'
-  ];
+  const AD_HOST_HINTS = ['doubleclick','googlesyndication','adservice','adnxs','taboola','outbrain','googleads'];
   await page.route('**/*', route => {
     const url = route.request().url();
     if (AD_HOST_HINTS.some(h => url.includes(h))) return route.abort();
     return route.continue();
   });
-  // bereits geladene Overlays aus dem DOM schmeißen
   await page.addInitScript(() => {
     const kill = () => {
-      const bad = [
-        ...document.querySelectorAll('iframe[src*="ads"], iframe[id*="google"], [id^="google_ads"], [class*="ads"]'),
-        ...document.querySelectorAll('[role="dialog"], .modal, .overlay, .backdrop')
-      ];
-      bad.forEach(el => { try { el.remove(); } catch(e){} });
-      // pauschal: sehr hohe z-index-Overlays deaktivieren
+      const nuke = (sel) => document.querySelectorAll(sel).forEach(el => { try{ el.remove(); }catch{} });
+      nuke('iframe[src*="ads"], iframe[id*="google"], [id^="google_ads"], [class*="ads"]');
+      nuke('[role="dialog"], .modal, .overlay, .backdrop');
       [...document.querySelectorAll('body *')]
         .filter(el => Number(getComputedStyle(el).zIndex) > 9999)
-        .forEach(el => { el.style.display = 'none'; });
+        .forEach(el => el.style.display = 'none');
     };
     document.addEventListener('DOMContentLoaded', kill);
     setInterval(kill, 500);
   });
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
 (async () => {
-  console.log('🚀 press.js v3.2 gestartet');
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--disable-dev-shm-usage']
-  });
+  console.log('🚀 press.js v3.3 gestartet');
+  const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
   const context = await browser.newContext({
     locale: 'de-DE',
     timezoneId: 'Europe/Berlin',
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
   });
   const page = await context.newPage();
 
   try {
-    // 1) Anti-Ad & Overlay-Härtung aktivieren
     await hardenAgainstAds(page);
 
-    // 2) Login-Seite nur bis DOM geladen
+    // Login-Seite
     await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await clickIfExists(page, COOKIE_CANDIDATES).catch(() => {});
-    await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES).catch(() => {});
-    await page.keyboard.press('Escape').catch(()=>{});
-    await page.waitForTimeout(500);
-    await clickIfExists(page, EMAIL_OPENERS).catch(() => {});
+    await clickIfExists(page, COOKIE_CANDIDATES);
+    await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
+    await clickIfExists(page, EMAIL_OPENERS);
+    await page.waitForTimeout(400);
 
-    // 3) Felder suchen (Main-DOM)
-    let emailSel = await findFirst(page, EMAIL_CANDIDATES, 3000);
-    let passSel  = await findFirst(page, PASS_CANDIDATES, 3000);
-    let submitSel= await findFirst(page, SUBMIT_CANDIDATES, 1500);
-
-    // 3a) Falls nicht gefunden: iFrames prüfen
-    if (!emailSel || !passSel) {
-      for (const frame of page.frames()) {
-        if (frame === page.mainFrame()) continue;
-        await clickIfExists(frame, OVERLAY_CLOSE_CANDIDATES).catch(() => {});
-        await clickIfExists(frame, COOKIE_CANDIDATES).catch(() => {});
-        await clickIfExists(frame, EMAIL_OPENERS).catch(() => {});
-        const e = await findFirst(frame, EMAIL_CANDIDATES, 2000);
-        const p = await findFirst(frame, PASS_CANDIDATES, 2000);
-        const s = await findFirst(frame, SUBMIT_CANDIDATES, 1000);
-        if (e && p) {
-          await frame.fill(e, process.env.USER_EMAIL, { timeout: 15000 });
-          await frame.fill(p, process.env.USER_PASS,  { timeout: 15000 });
-          if (s) await frame.click(s).catch(() => frame.press(p, 'Enter'));
-          else   await frame.press(p, 'Enter').catch(()=>{});
-          await page.waitForTimeout(1200);
-          emailSel = e; passSel = p; submitSel = s || null;
-          break;
+    // Login-Felder suchen
+    const findField = async () => {
+      let emailEl = await findFirst(page, EMAIL_CANDIDATES);
+      let passEl  = await findFirst(page, PASS_CANDIDATES);
+      let submitEl= await findFirst(page, SUBMIT_CANDIDATES);
+      if (!emailEl || !passEl) {
+        for (const frame of page.frames()) {
+          if (frame === page.mainFrame()) continue;
+          await clickIfExists(frame, OVERLAY_CLOSE_CANDIDATES);
+          await clickIfExists(frame, COOKIE_CANDIDATES);
+          await clickIfExists(frame, EMAIL_OPENERS);
+          const e = await findFirst(frame, EMAIL_CANDIDATES);
+          const p = await findFirst(frame, PASS_CANDIDATES);
+          const s = await findFirst(frame, SUBMIT_CANDIDATES);
+          if (e && p) return { ctx: frame, emailEl: e, passEl: p, submitEl: s };
         }
       }
-    }
+      return { ctx: page, emailEl, passEl, submitEl };
+    };
 
-    // 3b) Im Hauptdokument ausfüllen (falls dort gefunden)
-    if (emailSel && passSel && !page.isClosed()) {
-      await page.fill(emailSel, process.env.USER_EMAIL, { timeout: 15000 });
-      await page.fill(passSel,  process.env.USER_PASS,  { timeout: 15000 });
-      if (submitSel) await page.click(submitSel).catch(() => page.press(passSel, 'Enter'));
-      else           await page.press(passSel, 'Enter').catch(()=>{});
-      await page.waitForTimeout(1200);
-    }
+    const { ctx, emailEl, passEl, submitEl } = await findField();
 
-    // 3c) Falls gar nichts gefunden → Artefakte & GRÜN beenden
-    if (!emailSel || !passSel) {
+    if (!emailEl || !passEl) {
       console.log('ℹ️ Keine Login-Felder gefunden (Overlay/SSO?). Artefakte folgen.');
       await saveArtifacts(page, 'login-no-fields');
       process.exit(0);
     }
 
-    // 4) Zur Button-Seite (kein networkidle)
+    await emailEl.scrollIntoViewIfNeeded().catch(()=>{});
+    await passEl.scrollIntoViewIfNeeded().catch(()=>{});
+    await ctx.fill(await emailEl.selector(), process.env.USER_EMAIL, { timeout: 15000 });
+    await ctx.fill(await passEl.selector(),  process.env.USER_PASS,  { timeout: 15000 });
+    if (submitEl) await ctx.click(await submitEl.selector()).catch(() => ctx.press(await passEl.selector(), 'Enter'));
+    else          await ctx.press(await passEl.selector(), 'Enter');
+    await page.waitForTimeout(1200);
+
+    // Button-Seite
     await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES).catch(() => {});
+    await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
     await page.waitForTimeout(400);
 
-    // 5) Button suchen & ggf. klicken
-    const btn = page.locator(BTN_SEL).first();
-    const isVisible = await btn.isVisible({ timeout: 8000 }).catch(() => false);
-    if (!isVisible) {
-      console.log('ℹ️ Button nicht sichtbar – prüfe BTN_SEL / APP_URL.');
+    // Button suchen
+    const findButton = async () => {
+      let el = await findFirst(page, BTN_CANDIDATES, 3500);
+      if (el) return { ctx: page, el };
+      for (const frame of page.frames()) {
+        if (frame === page.mainFrame()) continue;
+        el = await findFirst(frame, BTN_CANDIDATES, 2500);
+        if (el) return { ctx: frame, el };
+      }
+      return null;
+    };
+
+    let btnCtx = await findButton();
+    if (!btnCtx) {
+      await page.mouse.wheel(0, 2000).catch(()=>{});
+      await page.waitForTimeout(500);
+      btnCtx = await findButton();
+    }
+
+    if (!btnCtx) {
+      console.log('ℹ️ Button nicht sichtbar – prüfe Kandidaten/Tabs/URL. Artefakte folgen.');
       await saveArtifacts(page, 'no-button');
       process.exit(0);
     }
 
-    const isDisabled = await btn.isDisabled().catch(() => true);
-    if (isDisabled) {
+    const { ctx: bctx, el: btn } = btnCtx;
+    await btn.scrollIntoViewIfNeeded().catch(()=>{});
+    const disabled = await btn.isDisabled().catch(() => true);
+    if (disabled) {
       console.log('⏳ Button ist gesperrt – später wieder versuchen.');
       await saveArtifacts(page, 'disabled');
       process.exit(0);
