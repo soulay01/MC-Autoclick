@@ -7,34 +7,17 @@ const LOGIN_URL = 'https://gpanel.eternalzero.cloud/auth/login'; // <-- anpassen
 const APP_URL   = 'https://gpanel.eternalzero.cloud/server/675ad07f';   // <-- anpassen
 ////////////////////////////////////////////////////////////////////////////////
 
-// ---- Selektor-Sammlungen ----------------------------------------------------
-const USER_CANDIDATES = [
-  'input[name="username"]',
-  '#username',
-  'input[type="text"]',
-  'input:not([type])',
-  'input[autocomplete="username"]',
-  'input[placeholder*="user" i]',
-  'input[aria-label*="user" i]'
+const BTN_CANDIDATES = [
+  'button[class*="RenewBox__RenewButton"]',
+  '[class*="RenewBox__RenewButton"]',
+  'button:has-text("Renew")','button:has-text("Extend")','button:has-text("Keep Alive")',
+  '[data-testid*="renew" i]','[aria-label*="renew" i]','.renew-button'
 ];
-const PASS_CANDIDATES = [
-  'input[name="password"]',
-  '#password',
-  'input[type="password"]',
-  'input[autocomplete="current-password"]',
-  'input[placeholder*="pass" i]',
-  'input[aria-label*="pass" i]'
-];
-const CONTINUE_CANDIDATES = [
-  'button[type="submit"]',
-  'input[type="submit"]',
-  'button:has-text("Continue")',
-  'button:has-text("Next")',
-  'button:has-text("Weiter")',
-  'button:has-text("Fortfahren")',
-  'button:has-text("Login")',
-  'button:has-text("Sign in")',
-  'button:has-text("Anmelden")'
+
+const BTN_OPENERS = [
+  'a:has-text("Renew")','button:has-text("Renew")',
+  'a:has-text("Extend")','button:has-text("Extend")',
+  'a:has-text("Keep Alive")','button:has-text("Keep Alive")'
 ];
 
 const COOKIE_CANDIDATES = [
@@ -47,24 +30,6 @@ const OVERLAY_CLOSE_CANDIDATES = [
   'button:has-text("Schließen")','button:has-text("Close")','[role="dialog"] button'
 ];
 
-// Renew-Button (robust gegen Klassen-Hashes/Texte)
-const BTN_CANDIDATES = [
-  'button[class*="RenewBox__RenewButton"]',
-  '[class*="RenewBox__RenewButton"]',
-  'button:has-text("Renew")',
-  'button:has-text("Extend")',
-  'button:has-text("Keep Alive")',
-  '[data-testid*="renew" i]',
-  '[aria-label*="renew" i]',
-  '.renew-button'
-];
-const BTN_OPENERS = [
-  'a:has-text("Renew")','button:has-text("Renew")',
-  'a:has-text("Extend")','button:has-text("Extend")',
-  'a:has-text("Keep Alive")','button:has-text("Keep Alive")'
-];
-
-// ---- Hilfsfunktionen --------------------------------------------------------
 async function saveArtifacts(page, label) {
   try {
     await page.screenshot({ path: `${label}.png`, fullPage: true }).catch(()=>{});
@@ -93,7 +58,7 @@ async function findFirst(ctx, selectors, timeout = 2500, allowAttached = true) {
     try {
       const el = ctx.locator(sel).first();
       if (await el.isVisible({ timeout })) return el;
-      if (allowAttached && await el.count().catch(()=>0)) return el; // im DOM, evtl. noch unsichtbar
+      if (allowAttached && await el.count().catch(()=>0)) return el;
     } catch {}
   }
   return null;
@@ -120,80 +85,134 @@ async function hardenAgainstAds(page) {
   });
 }
 
-// Sucht in Main + Frames (für Loginfelder oder Buttons)
-async function findInAllContexts(page, selectors, opts = {}) {
-  const { timeout = 2500, allowAttached = true } = opts;
-  const ctxs = [page, ...page.frames().filter(f => f !== page.mainFrame())];
-  for (const ctx of ctxs) {
-    const el = await findFirst(ctx, selectors, timeout, allowAttached);
-    if (el) return { ctx, el };
+// --------- Login-Helfer: in Main + Frames umfassend suchen ------------------
+async function enumerateFrames(page) {
+  return [page, ...page.frames().filter(f => f !== page.mainFrame())];
+}
+
+function byPlaceholders(ctx) {
+  return [
+    ctx.getByPlaceholder(/user|benutzer|name|e.?mail/i).first(),
+    ctx.getByPlaceholder(/pass|kennwort/i).first(),
+  ];
+}
+
+function byLabels(ctx) {
+  return [
+    ctx.getByLabel(/user|benutzer|name|e.?mail/i).first(),
+    ctx.getByLabel(/pass|kennwort/i).first(),
+  ];
+}
+
+function byRoles(ctx) {
+  return [
+    ctx.getByRole('textbox').first(), // Username (erstes Textfeld)
+    ctx.locator('input[type="password"]').first(),
+  ];
+}
+
+function byCss(ctx) {
+  const user = ctx.locator('input[name="username"], #username, input[autocomplete="username"], input[type="text"], input:not([type])').first();
+  const pass = ctx.locator('input[name="password"], #password, input[autocomplete="current-password"], input[type="password"]').first();
+  return [user, pass];
+}
+
+async function heuristicNeighbor(ctx) {
+  // Suche nach Labeltext und nimm nahe Inputs
+  const handle = await ctx.evaluateHandle(() => {
+    const pick = (root, rx) => {
+      const all = root.querySelectorAll('label, span, div, p');
+      for (const el of all) {
+        const t = (el.textContent || '').trim();
+        if (rx.test(t)) {
+          // nächster Input in den Nachbarn
+          let n = el;
+          for (let i=0; i<6 && n; i++) {
+            n = n.nextElementSibling;
+            if (!n) break;
+            const inp = n.querySelector('input');
+            if (inp) return inp;
+          }
+        }
+      }
+      return null;
+    };
+    const user = pick(document, /user|benutzer|name|e.?mail/i);
+    const pass = pick(document, /pass|kennwort/i);
+    return { user, pass };
+  }).catch(()=>null);
+  if (!handle) return [null, null];
+  // Wir können nicht direkt aus dem Handle Playwright-Locators machen → erneut per CSS annähern:
+  const userGuess = ctx.locator('label:has-text("user"), label:has-text("User"), :text("User") ~ input').first();
+  const passGuess = ctx.locator('label:has-text("Pass"), label:has-text("pass"), :text("Pass") ~ input[type="password"]').first();
+  return [userGuess, passGuess];
+}
+
+async function loginFindFields(page) {
+  const contexts = await enumerateFrames(page);
+
+  // 0) evtl. Tabs "Username/E-Mail" oder "Login/Sign in" öffnen
+  for (const ctx of contexts) {
+    await clickIfExists(ctx, [
+      'button:has-text("Username")','a:has-text("Username")',
+      'button:has-text("E-Mail")','a:has-text("E-Mail")',
+      'button:has-text("Mit Benutzername")','button:has-text("Mit E-Mail")'
+    ], 1200);
   }
+
+  // 1) Placeholder
+  for (const ctx of contexts) {
+    const [u, p] = byPlaceholders(ctx);
+    if (await u.isVisible().catch(()=>false) && await p.isVisible().catch(()=>false)) return { ctx, user: u, pass: p };
+  }
+  // 2) Label
+  for (const ctx of contexts) {
+    const [u, p] = byLabels(ctx);
+    if (await u.isVisible().catch(()=>false) && await p.isVisible().catch(()=>false)) return { ctx, user: u, pass: p };
+  }
+  // 3) CSS
+  for (const ctx of contexts) {
+    const [u, p] = byCss(ctx);
+    if (await u.isVisible().catch(()=>false) && await p.isVisible().catch(()=>false)) return { ctx, user: u, pass: p };
+  }
+  // 4) Role/Fallback
+  for (const ctx of contexts) {
+    const [u, p] = byRoles(ctx);
+    if (await u.isVisible().catch(()=>false) && await p.isVisible().catch(()=>false)) return { ctx, user: u, pass: p };
+  }
+  // 5) Heuristik (Nachbar von Text)
+  for (const ctx of contexts) {
+    const [u, p] = await heuristicNeighbor(ctx);
+    if (u && p && await u.isVisible().catch(()=>false) && await p.isVisible().catch(()=>false)) return { ctx, user: u, pass: p };
+  }
+
   return null;
 }
 
-// Zwei-Schritt-Login: Username -> (Continue/Next) -> Passwort -> Submit
-async function performLogin(page, context) {
-  // Eventuelle Overlays/Cookie-Banner schließen
-  await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
-  await clickIfExists(page, COOKIE_CANDIDATES);
-
-  // 1) USERNAME suchen (auch ohne <form>)
-  let uHit = await findInAllContexts(page, USER_CANDIDATES, { timeout: 5000 });
-  if (!uHit) {
-    console.log('ℹ️ Kein Username-Feld sichtbar.');
-    await saveArtifacts(page, 'login-no-user');
-    return false;
-  }
-  const { ctx: uctx, el: userEl } = uHit;
-
-  // 2) PASSWORT schauen — evtl. bereits vorhanden?
-  let pHit = await findInAllContexts(page, PASS_CANDIDATES, { timeout: 1500 });
-  const alreadyHasPassword = !!pHit;
-
-  // 3) Username füllen
-  await userEl.fill(process.env.USER_EMAIL, { timeout: 15000 }).catch(()=>{});
-
-  // 4) Falls Passwort noch nicht da: Continue/Next/Login drücken, oder Enter
-  if (!alreadyHasPassword) {
-    const cHit = await findInAllContexts(page, CONTINUE_CANDIDATES, { timeout: 1500, allowAttached: true });
-    if (cHit) {
-      await cHit.el.click({ timeout: 8000 }).catch(async ()=>{ await userEl.press('Enter'); });
-    } else {
-      await userEl.press('Enter').catch(()=>{});
-    }
-    await page.waitForTimeout(800);
-  }
-
-  // 5) Passwortfeld jetzt suchen (ggf. in Frames)
-  pHit = await findInAllContexts(page, PASS_CANDIDATES, { timeout: 6000 });
-  if (!pHit) {
-    console.log('ℹ️ Passwortfeld nicht sichtbar.');
-    await saveArtifacts(page, 'login-no-pass');
-    return false;
-  }
-  const { ctx: pctx, el: passEl } = pHit;
-
-  // 6) Passwort füllen
-  await passEl.fill(process.env.USER_PASS, { timeout: 15000 }).catch(()=>{});
-
-  // 7) Submit (Button/Enter)
-  let sHit = await findInAllContexts(page, CONTINUE_CANDIDATES, { timeout: 2000 });
-  if (sHit) {
-    await sHit.el.click({ timeout: 8000 }).catch(async ()=>{ await passEl.press('Enter'); });
-  } else {
-    await passEl.press('Enter').catch(()=>{});
-  }
-
-  // 8) kurze Wartezeit & Session speichern
-  await page.waitForTimeout(1200);
-  await context.storageState({ path: 'auth.json' });
-  console.log('💾 Session gespeichert');
-  return true;
+async function dumpLogin(page, label = 'login-dump') {
+  try {
+    const frames = page.frames().map(f => ({ url: f.url() }));
+    const bodyText = await page.evaluate(() => document.body ? document.body.innerText.slice(0, 2000) : '');
+    const inputs = await page.evaluate(() => {
+      const pick = (el) => ({
+        tag: el.tagName.toLowerCase(),
+        type: el.getAttribute('type') || '',
+        name: el.getAttribute('name') || '',
+        id: el.id || '',
+        placeholder: el.getAttribute('placeholder') || '',
+        aria: el.getAttribute('aria-label') || '',
+        cls: (el.className || '').toString().slice(0,150)
+      });
+      return Array.from(document.querySelectorAll('input')).map(pick).slice(0,300);
+    }).catch(()=>[]);
+    fs.writeFileSync(`${label}.json`, JSON.stringify({ url: page.url(), frames, bodyText, inputs }, null, 2));
+    console.log(`📄 Diagnose geschrieben: ${label}.json`);
+  } catch {}
 }
 
 // ----------------------------- MAIN -----------------------------------------
 (async () => {
-  console.log('🚀 press.js v5.2 gestartet');
+  console.log('🚀 press.js v6.3 gestartet');
 
   const hasState = fs.existsSync('auth.json');
   const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
@@ -208,26 +227,59 @@ async function performLogin(page, context) {
   try {
     await hardenAgainstAds(page);
 
-    // === 1) Direkt zur Zielseite (falls Session aktiv) ===
+    // 1) Direkt Zielseite (falls Session aktiv)
     await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await clickIfExists(page, COOKIE_CANDIDATES);
     await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
 
     let btn = await findFirst(page, BTN_CANDIDATES);
-
-    // === 2) Login, wenn nötig (robust: ohne <form>, mit 2-Step, mit Frames) ===
     if (!btn) {
+      // 2) Login-Flow
       await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      const ok = await performLogin(page, context);
-      if (!ok) {
-        console.log('ℹ️ Kein sichtbares Login-Formular – Artefakte folgen.');
+      await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
+      await clickIfExists(page, COOKIE_CANDIDATES);
+      await page.waitForTimeout(400);
+
+      // Öffne ggf. Tabs "Username" o. ä.
+      await clickIfExists(page, [
+        'button:has-text("Username")','a:has-text("Username")',
+        'button:has-text("E-Mail")','a:has-text("E-Mail")',
+        'button:has-text("Benutzername")'
+      ]);
+
+      const fields = await loginFindFields(page);
+
+      if (!fields) {
+        console.log('ℹ️ Login-Felder nicht sichtbar – Diagnose folgt.');
+        await dumpLogin(page, 'login-dump');
         await saveArtifacts(page, 'login-no-form');
         process.exit(0);
       }
+
+      const { ctx, user, pass } = fields;
+      await user.fill(process.env.USER_EMAIL, { timeout: 15000 }).catch(()=>{});
+      await pass.fill(process.env.USER_PASS,   { timeout: 15000 }).catch(()=>{});
+
+      // Submit: Button oder Enter
+      const submit =
+        (await findFirst(ctx, [
+          'button[type="submit"]','input[type="submit"]',
+          'button:has-text("Login")','button:has-text("Sign in")','button:has-text("Anmelden")',
+          'button:has-text("Weiter")','button:has-text("Continue")','button:has-text("Next")'
+        ], 2000)) || null;
+
+      if (submit) {
+        await submit.click().catch(async ()=>{ await pass.press('Enter'); });
+      } else {
+        await pass.press('Enter').catch(()=>{});
+      }
+
+      await page.waitForTimeout(1500);
+      await context.storageState({ path: 'auth.json' }); // Session speichern
       await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
     }
 
-    // === 3) Button suchen (mehrfach, Tabs öffnen, scrollen) ===
+    // 3) Button finden & klicken
     console.log('🔎 Suche nach Button …');
     for (let i = 0; i < 6 && !btn; i++) {
       await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
@@ -239,7 +291,7 @@ async function performLogin(page, context) {
     }
 
     if (!btn) {
-      // Diagnose-Dump
+      // Diagnose der Zielseite
       const dump = await page.evaluate(() => {
         const pick = (el) => ({
           tag: el.tagName.toLowerCase(),
@@ -256,12 +308,11 @@ async function performLogin(page, context) {
         };
       });
       fs.writeFileSync('dom-dump.json', JSON.stringify(dump, null, 2));
-      console.log('ℹ️ Button nicht sichtbar – dom-dump.json erstellt. Artefakte folgen.');
+      console.log('ℹ️ Button nicht sichtbar – dom-dump.json erstellt.');
       await saveArtifacts(page, 'no-button');
       process.exit(0);
     }
 
-    // === 4) Status prüfen & klicken ===
     await btn.scrollIntoViewIfNeeded().catch(()=>{});
     const disabledAttr = await btn.getAttribute('disabled').catch(()=>null);
     const isDisabled = disabledAttr !== null ? true : await btn.isDisabled().catch(()=>false);
@@ -278,6 +329,7 @@ async function performLogin(page, context) {
 
   } catch (err) {
     console.error('❌ Fehler:', err?.message || err);
+    await dumpLogin(page, 'login-dump-error');
     await saveArtifacts(page, 'error');
     process.exit(1);
   } finally {
