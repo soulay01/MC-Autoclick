@@ -5,9 +5,9 @@ const LOGIN_URL = 'https://gpanel.eternalzero.cloud/auth/login'; // <-- anpassen
 const APP_URL   = 'https://gpanel.eternalzero.cloud/server/675ad07f';   // <-- anpassen
 ////////////////////////////////////////////////////////////////////////////////
 
-// 🔎 Kandidaten für deinen Button (deiner ist direkt eingetragen)
+// 🔎 Button-Kandidaten (deiner ist ganz oben)
 const BTN_CANDIDATES = [
-  'button.RenewBox__RenewButton-sc-1inh2rq-6',   // dein exakter Button
+  'button.RenewBox__RenewButton-sc-1inh2rq-6',
   '.RenewBox__RenewButton-sc-1inh2rq-6',
   'button.Button__ButtonStyle-sc-1qu1gou-0.RenewBox__RenewButton-sc-1inh2rq-6',
   'button:has-text("Renew")',
@@ -17,31 +17,7 @@ const BTN_CANDIDATES = [
   '.renew-button'
 ];
 
-const EMAIL_OPENERS = [
-  'button:has-text("Continue with Email")','button:has-text("Sign in with Email")',
-  'button:has-text("Login with Email")','button:has-text("Mit E-Mail")',
-  'a:has-text("Mit E-Mail")','a:has-text("Continue with Email")'
-];
-
-const EMAIL_CANDIDATES = [
-  'input[name="email"]','input#email','input[type="email"]',
-  'input[name="username"]','input#username','input[name="identifier"]','input[name="emailAddress"]',
-  'input[autocomplete="username"]','input[autocomplete="email"]',
-  'input[placeholder*="E-Mail" i]','input[placeholder*="Email" i]','input[placeholder*="Mail" i]',
-  'input[aria-label*="E-Mail" i]','input[aria-label*="Email" i]'
-];
-const PASS_CANDIDATES = [
-  'input[name="password"]','input#password','input[type="password"]',
-  'input[autocomplete="current-password"]','input[autocomplete="new-password"]',
-  'input[placeholder*="Passwort" i]','input[placeholder*="Password" i]',
-  'input[aria-label*="Passwort" i]','input[aria-label*="Password" i]'
-];
-const SUBMIT_CANDIDATES = [
-  'button[type="submit"]','input[type="submit"]',
-  'button:has-text("LOGIN")','button:has-text("Login")','button:has-text("Log in")','button:has-text("Anmelden")',
-  '[data-testid="login-submit"]','button[aria-label*="Login" i]','button[aria-label*="Anmelden" i]'
-];
-
+// Cookie-/Overlay-Buttons
 const COOKIE_CANDIDATES = [
   'button:has-text("Accept")','button:has-text("I agree")',
   'button:has-text("Akzeptieren")','button:has-text("Alle akzeptieren")',
@@ -52,7 +28,21 @@ const OVERLAY_CLOSE_CANDIDATES = [
   'button:has-text("Schließen")','button:has-text("Close")','[role="dialog"] button'
 ];
 
-////////////////////////////////////////////////////////////////////////////////
+// CSS-Backups
+const EMAIL_CANDIDATES = [
+  'input[name="email"]','input#email','input[type="email"]',
+  'input[name="user"]','input#user','input[name="username"]','input#username',
+  'input[name="identifier"]','input[name="emailAddress"]',
+  'input[autocomplete="username"]','input[autocomplete="email"]'
+];
+const PASS_CANDIDATES = [
+  'input[name="password"]','input#password','input[type="password"]',
+  'input[autocomplete="current-password"]','input[autocomplete="new-password"]'
+];
+const SUBMIT_CANDIDATES = [
+  'button[type="submit"]','input[type="submit"]',
+  'button:has-text("LOGIN")','button:has-text("Login")','button:has-text("Log in")','button:has-text("Anmelden")'
+];
 
 async function saveArtifacts(page, label) {
   try {
@@ -61,22 +51,16 @@ async function saveArtifacts(page, label) {
     if (html) require('fs').writeFileSync(`${label}.html`, html);
   } catch {}
 }
-
 async function clickIfExists(ctx, selectors, timeout = 2500) {
   for (const sel of selectors) {
     try {
       const el = ctx.locator(sel).first();
-      if (await el.isVisible({ timeout })) {
-        await el.click({ timeout }).catch(() => {});
-        await ctx.waitForTimeout(250);
-        return true;
-      }
+      if (await el.isVisible({ timeout })) { await el.click({ timeout }).catch(()=>{}); await ctx.waitForTimeout(250); return true; }
     } catch {}
   }
   return false;
 }
-
-async function findFirst(ctx, selectors, timeout = 3500) {
+async function findFirst(ctx, selectors, timeout = 3000) {
   for (const sel of selectors) {
     try {
       const el = ctx.locator(sel).first();
@@ -85,7 +69,6 @@ async function findFirst(ctx, selectors, timeout = 3500) {
   }
   return null;
 }
-
 async function hardenAgainstAds(page) {
   const AD_HOST_HINTS = ['doubleclick','googlesyndication','adservice','adnxs','taboola','outbrain','googleads'];
   await page.route('**/*', route => {
@@ -107,10 +90,8 @@ async function hardenAgainstAds(page) {
   });
 }
 
-////////////////////////////////////////////////////////////////////////////////
-
 (async () => {
-  console.log('🚀 press.js v3.3-fix gestartet');
+  console.log('🚀 press.js v3.3-fix2 gestartet');
   const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
   const context = await browser.newContext({
     locale: 'de-DE',
@@ -122,85 +103,83 @@ async function hardenAgainstAds(page) {
   try {
     await hardenAgainstAds(page);
 
-    // Login-Seite
+    // 1) Login-Seite öffnen (DOM reicht), Overlays schließen
     await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await clickIfExists(page, COOKIE_CANDIDATES);
     await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
-    await clickIfExists(page, EMAIL_OPENERS);
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(300);
 
-    // Login-Felder suchen (main + frames)
-    const findField = async () => {
-      let emailEl = await findFirst(page, EMAIL_CANDIDATES);
-      let passEl  = await findFirst(page, PASS_CANDIDATES);
-      let submitEl= await findFirst(page, SUBMIT_CANDIDATES);
-      if (!emailEl || !passEl) {
-        for (const frame of page.frames()) {
-          if (frame === page.mainFrame()) continue;
-          await clickIfExists(frame, OVERLAY_CLOSE_CANDIDATES);
-          await clickIfExists(frame, COOKIE_CANDIDATES);
-          await clickIfExists(frame, EMAIL_OPENERS);
-          const e = await findFirst(frame, EMAIL_CANDIDATES);
-          const p = await findFirst(frame, PASS_CANDIDATES);
-          const s = await findFirst(frame, SUBMIT_CANDIDATES);
-          if (e && p) return { ctx: frame, emailEl: e, passEl: p, submitEl: s };
-        }
+    // 2) Pterodactyl: erst per Label/Role versuchen (robust)
+    let emailEl = page.getByLabel(/username\s*or\s*email/i).first();
+    let passEl  = page.getByLabel(/password/i).first();
+    let submitEl= page.getByRole('button', { name: /login/i }).first();
+
+    // Falls Label/Role nicht matchen → CSS-Kandidaten
+    const emailVisible = await emailEl.isVisible().catch(()=>false);
+    const passVisible  = await passEl.isVisible().catch(()=>false);
+    if (!emailVisible || !passVisible) {
+      emailEl = await findFirst(page, EMAIL_CANDIDATES) || emailEl;
+      passEl  = await findFirst(page, PASS_CANDIDATES)  || passEl;
+      submitEl= (await findFirst(page, SUBMIT_CANDIDATES)) || submitEl;
+    }
+
+    // Letzter Fallback: erstes Text/Email-Feld + Passwortfeld im gleichen Formular
+    if (!(await emailEl.isVisible().catch(()=>false)) || !(await passEl.isVisible().catch(()=>false))) {
+      const form = page.locator('form').first();
+      const emailFallback = form.locator('input[type="email"], input[type="text"]').first();
+      const passFallback  = form.locator('input[type="password"]').first();
+      if (await emailFallback.isVisible().catch(()=>false) && await passFallback.isVisible().catch(()=>false)) {
+        emailEl = emailFallback; passEl = passFallback;
       }
-      return { ctx: page, emailEl, passEl, submitEl };
-    };
+    }
 
-    const { ctx, emailEl, passEl, submitEl } = await findField();
-
-    if (!emailEl || !passEl) {
-      console.log('ℹ️ Keine Login-Felder gefunden (Overlay/SSO?). Artefakte folgen.');
+    // Wenn immer noch nichts: Artefakte & grün raus
+    if (!(await emailEl.isVisible().catch(()=>false)) || !(await passEl.isVisible().catch(()=>false))) {
+      console.log('ℹ️ Login-Felder weiterhin nicht sichtbar – bitte Artifact prüfen (login-no-fields.html/png).');
       await saveArtifacts(page, 'login-no-fields');
       process.exit(0);
     }
 
-    // ✅ Locator-Methoden direkt nutzen (kein .selector())
-    await emailEl.scrollIntoViewIfNeeded().catch(()=>{});
-    await passEl.scrollIntoViewIfNeeded().catch(()=>{});
+    // Ausfüllen & submit
     await emailEl.fill(process.env.USER_EMAIL, { timeout: 15000 });
-    await passEl.fill(process.env.USER_PASS,  { timeout: 15000 });
-
-    if (submitEl) {
+    await passEl.fill(process.env.USER_PASS,   { timeout: 15000 });
+    if (await submitEl.isVisible().catch(()=>false)) {
       await submitEl.click().catch(async () => { await passEl.press('Enter'); });
     } else {
       await passEl.press('Enter').catch(()=>{});
     }
     await page.waitForTimeout(1200);
 
-    // Button-Seite
+    // 3) Button-Seite
     await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(300);
 
-    // Button suchen (main + frames), ggf. scroll & retry
-    const findButton = async () => {
+    // Button suchen (main + frames), ggf. scrollen & retry
+    const findFirstEl = async () => {
       let el = await findFirst(page, BTN_CANDIDATES, 3500);
-      if (el) return { ctx: page, el };
+      if (el) return el;
       for (const frame of page.frames()) {
         if (frame === page.mainFrame()) continue;
         el = await findFirst(frame, BTN_CANDIDATES, 2500);
-        if (el) return { ctx: frame, el };
+        if (el) return el;
       }
       return null;
     };
 
-    let btnCtx = await findButton();
-    if (!btnCtx) {
+    let btn = await findFirstEl();
+    if (!btn) {
       await page.mouse.wheel(0, 2000).catch(()=>{});
-      await page.waitForTimeout(500);
-      btnCtx = await findButton();
+      await page.waitForTimeout(400);
+      btn = await findFirstEl();
     }
 
-    if (!btnCtx) {
+    if (!btn) {
       console.log('ℹ️ Button nicht sichtbar – prüfe Kandidaten/Tabs/URL. Artefakte folgen.');
       await saveArtifacts(page, 'no-button');
       process.exit(0);
     }
 
-    const { el: btn } = btnCtx;
     await btn.scrollIntoViewIfNeeded().catch(()=>{});
     const disabled = await btn.isDisabled().catch(() => true);
     if (disabled) {
