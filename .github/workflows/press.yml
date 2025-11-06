@@ -1,0 +1,40 @@
+name: press-hourly
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # stündlich, **UTC**
+  workflow_dispatch:      # manueller Start-Button in der UI
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # optional: Caching beschleunigt Runs ein wenig
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            ~/.cache/ms-playwright
+          key: ${{ runner.os }}-pressbot-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-pressbot-
+
+      - name: Install deps
+        run: npm ci || npm i
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run press
+        run: node press.js
+        env:
+          USER_EMAIL: ${{ secrets.USER_EMAIL }}
+          USER_PASS:  ${{ secrets.USER_PASS }}
