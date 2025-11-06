@@ -7,6 +7,28 @@ const LOGIN_URL = 'https://gpanel.eternalzero.cloud/auth/login'; // <-- anpassen
 const APP_URL   = 'https://gpanel.eternalzero.cloud/server/675ad07f';   // <-- anpassen
 ////////////////////////////////////////////////////////////////////////////////
 
+// Login-Selektoren (hart: username, flexibel: Fallbacks)
+const LOGIN_USER_SELECTORS = [
+  'input[name="username"]',
+  '#username',
+  'input[type="text"]',
+  'input:not([type])'
+];
+const LOGIN_PASS_SELECTORS = [
+  'input[name="password"]',
+  '#password',
+  'input[type="password"]',
+  'input[autocomplete="current-password"]'
+];
+const LOGIN_SUBMIT_SELECTORS = [
+  'button[type="submit"]',
+  'input[type="submit"]',
+  'button:has-text("Login")',
+  'button:has-text("Sign in")',
+  'button:has-text("Anmelden")'
+];
+
+// Renew-Button (robust gegen Klassen-Hashes)
 const BTN_CANDIDATES = [
   'button[class*="RenewBox__RenewButton"]',
   '[class*="RenewBox__RenewButton"]',
@@ -18,13 +40,14 @@ const BTN_CANDIDATES = [
   '.renew-button'
 ];
 
+// Mögliche „Opener“/Tabs
 const BTN_OPENERS = [
   'a:has-text("Renew")','button:has-text("Renew")',
   'a:has-text("Extend")','button:has-text("Extend")',
-  'a:has-text("Keep Alive")','button:has-text("Keep Alive")',
-  '[data-testid*="renew" i]','[aria-controls*="renew" i]','[aria-label*="renew" i]'
+  'a:has-text("Keep Alive")','button:has-text("Keep Alive")'
 ];
 
+// Cookie/Overlay
 const COOKIE_CANDIDATES = [
   'button:has-text("Accept")','button:has-text("I agree")',
   'button:has-text("Akzeptieren")','button:has-text("Alle akzeptieren")',
@@ -57,7 +80,6 @@ async function clickIfExists(ctx, selectors, timeout = 2500) {
   }
   return false;
 }
-
 async function findFirst(ctx, selectors, timeout = 2500) {
   for (const sel of selectors) {
     try {
@@ -68,7 +90,6 @@ async function findFirst(ctx, selectors, timeout = 2500) {
   }
   return null;
 }
-
 async function hardenAgainstAds(page) {
   const BAD = ['doubleclick','googlesyndication','adservice','adnxs','taboola','outbrain','googleads'];
   await page.route('**/*', route => {
@@ -91,7 +112,7 @@ async function hardenAgainstAds(page) {
 }
 
 (async () => {
-  console.log('🚀 press.js v4-final gestartet');
+  console.log('🚀 press.js v5.1 gestartet');
 
   const hasState = fs.existsSync('auth.json');
   const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
@@ -99,46 +120,70 @@ async function hardenAgainstAds(page) {
     storageState: hasState ? 'auth.json' : undefined,
     locale: 'de-DE',
     timezoneId: 'Europe/Berlin',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36'
   });
   const page = await context.newPage();
 
   try {
     await hardenAgainstAds(page);
 
-    // === LOGIN ===
+    // === 1) Zielseite (falls Session aktiv) ===
     await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    console.log('➡️ Seite:', page.url());
     await clickIfExists(page, COOKIE_CANDIDATES);
     await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
 
-    // Button schon sichtbar? (Session gültig)
     let btn = await findFirst(page, BTN_CANDIDATES);
+
+    // === 2) Login nur wenn nötig ===
     if (!btn) {
-      console.log('🔐 Login nötig');
       await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      const form = page.locator('form').filter({ has: page.locator('input') }).first();
-      const visible = await form.isVisible({ timeout: 8000 }).catch(()=>false);
-      if (!visible) {
-        console.log('ℹ️ Kein sichtbares Login-Formular.');
+      await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
+      await clickIfExists(page, COOKIE_CANDIDATES);
+
+      // Sichtbares Formular (mit Passwortfeld) – erst main, sonst frames
+      let form = page.locator('form').filter({ has: page.locator('input[type="password"]') }).first();
+      if (!await form.isVisible({ timeout: 6000 }).catch(()=>false)) {
+        for (const frame of page.frames()) {
+          if (frame === page.mainFrame()) continue;
+          const f = frame.locator('form').filter({ has: frame.locator('input[type="password"]') }).first();
+          if (await f.isVisible({ timeout: 3000 }).catch(()=>false)) { form = f; break; }
+        }
+      }
+      const formOk = await form.isVisible().catch(()=>false);
+      if (!formOk) {
+        console.log('ℹ️ Kein sichtbares Login-Formular – Artefakte folgen.');
         await saveArtifacts(page, 'login-no-form');
         process.exit(0);
       }
-      const userEl = form.locator('input[name="user"], input#user, input[type="email"], input[type="text"], input:not([type])').first();
-      const passEl = form.locator('input[name="password"], input#password, input[type="password"]').first();
-      const submitEl = form.locator('button[type="submit"], input[type="submit"], button:has-text("Login")').first();
 
-      await userEl.fill(process.env.USER_EMAIL);
-      await passEl.fill(process.env.USER_PASS);
-      await submitEl.click().catch(async()=>{await passEl.press('Enter');});
+      // Username/Passwort gezielt + Fallbacks
+      const userEl = await findFirst(form, LOGIN_USER_SELECTORS) || form.locator('input[type="text"], input:not([type])').first();
+      const passEl = await findFirst(form, LOGIN_PASS_SELECTORS) || form.locator('input[type="password"]').first();
+      const submitEl = await findFirst(form, LOGIN_SUBMIT_SELECTORS) || form.locator('button, input[type="submit"]').first();
+
+      if (!(await userEl.isVisible().catch(()=>false)) || !(await passEl.isVisible().catch(()=>false))) {
+        console.log('ℹ️ Login-Felder nicht sichtbar – Artefakte folgen.');
+        await saveArtifacts(page, 'login-no-fields');
+        process.exit(0);
+      }
+
+      // ⚠️ USER_EMAIL = dein BENUTZERNAME (kein E-Mail nötig), USER_PASS = Passwort
+      await userEl.fill(process.env.USER_EMAIL, { timeout: 15000 });
+      await passEl.fill(process.env.USER_PASS,   { timeout: 15000 });
+
+      if (await submitEl.isVisible().catch(()=>false)) {
+        await submitEl.click().catch(async ()=>{ await passEl.press('Enter'); });
+      } else {
+        await passEl.press('Enter').catch(()=>{});
+      }
+
       await page.waitForTimeout(1500);
-      await context.storageState({ path: 'auth.json' });
-      console.log('💾 Session gespeichert');
+      await context.storageState({ path: 'auth.json' }); // Session speichern
       await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
     }
 
-    // === BUTTON-SUCHE ===
-    console.log('🔎 Suche nach Button ...');
+    // === 3) Button finden & klicken (mit Retries) ===
+    console.log('🔎 Suche nach Button …');
     for (let i = 0; i < 6 && !btn; i++) {
       await clickIfExists(page, OVERLAY_CLOSE_CANDIDATES);
       await clickIfExists(page, BTN_OPENERS);
