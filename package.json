@@ -1,0 +1,12 @@
+{
+  "name": "press-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "press": "node press.js"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.47.0"
+  }
+}
