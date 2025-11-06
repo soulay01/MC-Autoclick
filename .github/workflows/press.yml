@@ -39,7 +39,28 @@ jobs:
       # Nur Chromium installieren (reicht für dein Script & schneller/stabiler)
       - name: Install Playwright (Chromium only)
         run: npx playwright install --with-deps chromium
+        
+      - name: Download auth state (if exists)
+        uses: actions/download-artifact@v4
+        with:
+          name: auth-state
+          path: .
+        continue-on-error: true   # falls es das Artifact beim ersten Lauf noch nicht gibt
 
+      - name: Run press
+        run: node press.js
+        env:
+          USER_EMAIL: ${{ secrets.USER_EMAIL }}
+          USER_PASS:  ${{ secrets.USER_PASS }}
+
+      - name: Upload auth state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-state
+          path: auth.json
+          if-no-files-found: ignore
+        
       - name: Run press
         run: node press.js
         env:
