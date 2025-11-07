@@ -5,7 +5,7 @@ on:
     - cron: '0 * * * *'   # stündlich (UTC)
   workflow_dispatch:       # manueller Start-Button
 
-# Verhindert Überschneidungen, falls ein Lauf länger dauert
+# Verhindert Überschneidungen (ein Run zurzeit)
 concurrency:
   group: press-hourly
   cancel-in-progress: false
@@ -16,13 +16,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # Cache für node_modules und Playwright-Downloads (schneller bei Folgeläufen)
+      # Cache für node_modules und Playwright
       - name: Cache node_modules & Playwright
         uses: actions/cache@v4
         with:
@@ -36,16 +38,21 @@ jobs:
       - name: Install deps
         run: npm ci || npm i
 
-      # Nur Chromium installieren (reicht für dein Script & schneller/stabiler)
       - name: Install Playwright (Chromium only)
         run: npx playwright install --with-deps chromium
-        
+
+      # (Optional) Startzeit-Log – hilft beim Debuggen von UTC vs. Berlin
+      - name: Echo start time (UTC)
+        run: |
+          echo "Started at (UTC): $(date -u '+%Y-%m-%d %H:%M:%S')"
+          echo "Ref: ${{ github.ref }}  Default?: ${{ github.event.repository.default_branch }}"
+
       - name: Download auth state (if exists)
         uses: actions/download-artifact@v4
         with:
           name: auth-state
           path: .
-        continue-on-error: true   # falls es das Artifact beim ersten Lauf noch nicht gibt
+        continue-on-error: true   # beim ersten Lauf gibt's das Artifact noch nicht
 
       - name: Run press
         run: node press.js
@@ -61,14 +68,8 @@ jobs:
           path: auth.json
           if-no-files-found: ignore
           retention-days: 30
-      - name: Run press
-        run: node press.js
-        env:
-          USER_EMAIL: ${{ secrets.USER_EMAIL }}
-          USER_PASS:  ${{ secrets.USER_PASS }}
 
-      # Debug-Assets immer hochladen (Screenshots/HTML aus press.js)
-      - name: Upload artifacts (screenshot & html)
+      - name: Upload artifacts (screenshot & html & json)
         if: always()
         uses: actions/upload-artifact@v4
         with:
