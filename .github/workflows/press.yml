@@ -2,7 +2,7 @@ name: press-hourly
 
 on:
   schedule:
-    - cron: '0 * * * *'   # stündlich (UTC)
+    - cron: '0,30 * * * *'   # stündlich (UTC)
   workflow_dispatch:       # manueller Start-Button
 
 # Verhindert Überschneidungen (ein Run zurzeit)
